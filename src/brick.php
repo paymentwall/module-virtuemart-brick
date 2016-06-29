@@ -1,7 +1,9 @@
 <?php
 
 defined('_JEXEC') or die('Restricted access');
-
+if (!class_exists('Creditcard')) {
+    require_once(JPATH_VM_ADMINISTRATOR . DS . 'helpers' . DS . 'creditcard.php');
+}
 if (!class_exists('Paymentwall_Config'))
     require(VMPATH_PLUGINS . DS . 'vmpayment' . DS . 'brick' . DS . 'paymentwall-php' . DS . 'lib' . DS . 'paymentwall.php');
 
@@ -11,9 +13,20 @@ if (!class_exists('vmPSPlugin'))
 if (!class_exists('VirtueMartModelOrders'))
     require(JPATH_VM_ADMINISTRATOR . DS . 'models' . DS . 'orders.php');
 
+define('DEFAULT_PINGBACK_RESPONSE', 'OK');
+define('VM_ORDER_STATUS_CONFIRMED', 'C');
+define('VM_ORDER_STATUS_REFUNDED', 'R');
+
 class plgVmpaymentBrick extends vmPSPlugin
 {
     private $paymentConfigs = array();
+    private $_cc_expire_month = '';
+    private $_cc_expire_year = '';
+    private $_cc_name = '';
+    private $_cc_type = '';
+    private $_cc_number = '';
+    private $_cc_cvv = '';
+    private $_key = 'brick';
 
     function __construct(& $subject, $config)
     {
@@ -24,10 +37,10 @@ class plgVmpaymentBrick extends vmPSPlugin
         $this->_tableId = 'id';
         $this->tableFields = array_keys($this->getTableSQLFields());
         $varsToPush = array(
-            'app_key' => array('', 'char'),
-            'secret_key' => array('', 'char'),
-            'public_key' => array('', 'char'),
-            'private_key' => array('', 'char')
+            'brick_app_key' => array('', 'char'),
+            'brick_secret_key' => array('', 'char'),
+            'brick_public_key' => array('', 'char'),
+            'brick_private_key' => array('', 'char')
         );
         $this->setConfigParameterable($this->_configTableFieldName, $varsToPush);
     }
@@ -51,7 +64,8 @@ class plgVmpaymentBrick extends vmPSPlugin
             'cost_per_transaction' => 'decimal(10,2)',
             'cost_min_transaction' => 'decimal(10,2)',
             'cost_percent_total' => 'decimal(10,2)',
-            'tax_id' => 'smallint(1)'
+            'tax_id' => 'smallint(1)',
+            'transaction_id' => 'varchar(128)',
         );
 
         return $sqlFields;
@@ -89,7 +103,6 @@ class plgVmpaymentBrick extends vmPSPlugin
      */
     function plgVmConfirmedOrder($cart, $order)
     {
-
         if (!($this->_currentMethod = $this->getVmPluginMethod($order['details']['BT']->virtuemart_paymentmethod_id))) {
             return NULL; // Another method was selected, do nothing
         }
@@ -99,30 +112,71 @@ class plgVmpaymentBrick extends vmPSPlugin
         }
 
         VmConfig::loadJLang('com_virtuemart', true);
-
-        // Prepare data that should be stored in the database
-        $transaction_data = $this->prepareTransactionData($order, $cart);
-        $this->storePSPluginInternalData($transaction_data);
-
-        $uid = $order['details']['BT']->virtuemart_user_id != 0 ? $order['details']['BT']->customer_number : $_SERVER['REMOTE_ADDR'];
         $this->initPaymentwallConfigs($order['details']['BT']->virtuemart_paymentmethod_id);
 
-        $paymentId = $order['details']['BT']->virtuemart_paymentmethod_id;
- 
+        $cardInfo = array(
+            'email' => $order['details']['BT']->email,
+            'amount' => $order['details']['BT']->order_total,
+            'currency' => $this->getCurrencyCodeById($order['details']['BT']->order_currency),
+            'token' => $_POST['hiddenToken'],
+            'fingerprint' => $_POST['hiddenFingerprint'],
+            'description' => "Payment " . $order['details']['BT']->order_number
+        );
 
-        $html = $this->renderByLayout('brick', array(
-            'order_number' => $order['details']['BT']->order_number,
-            'order_pass' => $order['details']['BT']->order_pass,
-            'order_total' => $order['details']['BT']->order_total,
-            'order_name' => $order['details']['BT']->order_name,
-            'public_key' => $this->getBrickConfig($paymentId, 'public_key'),
-            'currency_code' => $this->getCurrencyCodeById($order['details']['BT']->order_currency),
-            'action_url' => rtrim(JUri::base(), '/') . $this->getOwnUrl() . '/billing.php?payment_id=' . $order['details']['BT']->virtuemart_paymentmethod_id . '&order_id=' . $order['details']['BT']->virtuemart_order_id,
-            'base_url' => JUri::base()
+        $charge = new Paymentwall_Charge();
+        $charge->create(array_merge(
+            $cardInfo,
+            $this->getUserProfileData($order['details']['BT'])
         ));
 
+        $response = $charge->getPublicData();
+        $responseData = json_decode($charge->getRawResponseData(), true);
+
+        $orderId = $order['details']['BT']->virtuemart_order_id;
+
+        $modelOrder = new VirtueMartModelOrders();
+        $order = $modelOrder->getOrder($orderId);
+
+        if ($charge->isSuccessful()) {
+            $transactionId = $charge->getId();
+            $orderUpdate = array(
+                'customer_notified' => 0,
+                'virtuemart_order_id' => $orderId,
+                'comments' => 'Brick payment successful. TransactionID: #' . $transactionId
+            );
+            if ($charge->isCaptured()) {
+                $this->callDeliveryConfirmationApi($order, $transactionId);
+                $orderUpdate['order_status'] = VM_ORDER_STATUS_CONFIRMED;
+            } elseif ($charge->isUnderReview()) {
+                // decide on risk charge
+            }
+            $modelOrder->updateStatusForOneOrder($orderId, $orderUpdate, true);
+
+            $html = $this->renderByLayout('brick', array(
+                'charge_id' => $responseData['id'],
+                'amount' => $responseData['amount'],
+                'currency' => $responseData['currency'],
+                'card' => $responseData['card'],
+                'order_number' => $order['details']['BT']->order_number,
+                'status' => 'OK',
+                'message' => vmText::_('VMPAYMENT_BRICK_SUCCESS') . ' TransactionID: #' . $transactionId,
+            ));
+
+            // Prepare data that should be stored in the database
+            $transaction_data = $this->prepareTransactionData($order, $cart, $transactionId);
+            $this->storePSPluginInternalData($transaction_data);
+        } else {
+            $errors = json_decode($response, true);
+            $html = $this->renderByLayout('brick', array(
+                'status' => 'Fail',
+                'message' => '#'.$errors['error']['code'] .' - '. $errors['error']['message'],
+            ));
+        }
+
         vRequest::setVar('html', $html);
+        $this->clearBrickSesison();
         $cart->emptyCart();
+
         return true;
     }
 
@@ -142,7 +196,90 @@ class plgVmpaymentBrick extends vmPSPlugin
      */
     function plgVmOnSelectCheckPayment(VirtueMartCart $cart, &$msg)
     {
+        $this->_cc_type = vRequest::getVar('cc_type_' . $cart->virtuemart_paymentmethod_id, '');
+        $this->_cc_name = vRequest::getVar('cc_name_' . $cart->virtuemart_paymentmethod_id, '');
+        $this->_cc_number = str_replace(" ", "", vRequest::getVar('cc_number_' . $cart->virtuemart_paymentmethod_id, ''));
+        $this->_cc_cvv = vRequest::getVar('cc_cvv_' . $cart->virtuemart_paymentmethod_id, '');
+        $this->_cc_expire_month = vRequest::getVar('cc_expire_month_' . $cart->virtuemart_paymentmethod_id, '');
+        $this->_cc_expire_year = vRequest::getVar('cc_expire_year_' . $cart->virtuemart_paymentmethod_id, '');
+
+        $this->_setBrickIntoSession();
+
         return $this->OnSelectCheck($cart);
+    }
+
+    function _setBrickIntoSession()
+    {
+        $session = JFactory::getSession();
+        $sessionBrick = new stdClass();
+
+        // card information
+        $sessionBrick->cc_type = $this->_cc_type;
+        $sessionBrick->cc_number = $this->encryptData($this->_cc_number);
+        $sessionBrick->cc_cvv = $this->encryptData($this->_cc_cvv);
+        $sessionBrick->cc_expire_month = $this->_cc_expire_month;
+        $sessionBrick->cc_expire_year = $this->_cc_expire_year;
+        $sessionBrick->cc_valid = $this->_cc_valid;
+
+        $session->set('Brick', json_encode($sessionBrick), 'vm');
+    }
+
+    function _getBrickFromSession()
+    {
+        $session = JFactory::getSession();
+        $brickSession = $session->get('Brick', 0, 'vm');
+
+        if (!empty($brickSession)) {
+            $brickData = (object)json_decode($brickSession, true);
+            $this->_cc_type = $brickData->cc_type;
+            $this->_cc_number = $this->decryptData($brickData->cc_number);
+            $this->_cc_cvv = $this->decryptData($brickData->cc_cvv);
+            $this->_cc_expire_month = $brickData->cc_expire_month;
+            $this->_cc_expire_year = $brickData->cc_expire_year;
+            $this->_cc_valid = $brickData->cc_valid;
+        }
+    }
+
+    public function clearBrickSesison()
+    {
+        $session = JFactory::getSession();
+        $session->set('Brick', null, 'vm');
+    }
+
+    public function encryptData($data)
+    {
+        $iv = mcrypt_create_iv(
+            mcrypt_get_iv_size(MCRYPT_RIJNDAEL_128, MCRYPT_MODE_CBC),
+            MCRYPT_DEV_URANDOM
+        );
+
+        return $encrypted = base64_encode(
+            $iv .
+            mcrypt_encrypt(
+                MCRYPT_RIJNDAEL_128,
+                hash('sha256', $this->_key, true),
+                $data,
+                MCRYPT_MODE_CBC,
+                $iv
+            )
+        );
+    }
+
+    public function decryptData($encrypted)
+    {
+        $data = base64_decode($encrypted);
+        $iv = substr($data, 0, mcrypt_get_iv_size(MCRYPT_RIJNDAEL_128, MCRYPT_MODE_CBC));
+
+        return $decrypted = rtrim(
+            mcrypt_decrypt(
+                MCRYPT_RIJNDAEL_128,
+                hash('sha256', $this->_key, true),
+                substr($data, mcrypt_get_iv_size(MCRYPT_RIJNDAEL_128, MCRYPT_MODE_CBC)),
+                MCRYPT_MODE_CBC,
+                $iv
+            ),
+            "\0"
+        );
     }
 
     /**
@@ -156,8 +293,87 @@ class plgVmpaymentBrick extends vmPSPlugin
      */
     function plgVmDisplayListFEPayment(VirtueMartCart $cart, $selected = 0, &$htmlIn)
     {
-        //ToDo add image logo
-        return $this->displayListFE($cart, $selected, $htmlIn);
+        if ($this->getPluginMethods($cart->vendorId) === 0) {
+            if (empty($this->_name)) {
+                vmAdminInfo('displayListFE cartVendorId=' . $cart->vendorId);
+                $app = JFactory::getApplication();
+                $app->enqueueMessage(vmText::_('COM_VIRTUEMART_CART_NO_' . strtoupper($this->_psType)));
+                return FALSE;
+            } else {
+                return FALSE;
+            }
+        }
+
+        $html = array();
+        $method_name = $this->_psType . '_name';
+        $virtuemart_paymentmethod_id = 0;
+        foreach ($this->methods as $method) {
+            if ($this->checkConditions($cart, $method, $cart->cartPrices)) {
+                // the price must not be overwritten directly in the cart
+                $prices = $cart->cartPrices;
+                $methodSalesPrice = $this->setCartPrices($cart, $prices, $method);
+
+                $method->$method_name = $this->renderPluginName($method);
+                $html[] = $this->getPluginHtml($method, $selected, $methodSalesPrice);
+                $virtuemart_paymentmethod_id = $method->virtuemart_paymentmethod_id;
+            }
+        }
+        if (!empty($html)) {
+            $html[] = $this->getCCForm($virtuemart_paymentmethod_id);
+            $htmlIn[] = $html;
+            return TRUE;
+        }
+
+        return FALSE;
+    }
+
+    public function getCCForm($payment_method_id)
+    {
+        $this->_getBrickFromSession();
+        $creditCards = array(
+            'Visa',
+            'Mastercard',
+            'AmericanExpress',
+            'Discover',
+            'JCB',
+        );
+
+        $creditCardList = '';
+        if ($creditCards) {
+            $creditCardList = ($this->_renderCreditCardList($creditCards, $this->_cc_type, $payment_method_id, FALSE));
+        }
+
+        $html = $this->renderByLayout('ccform', array(
+            'public_key' => $this->getBrickConfig($payment_method_id, 'brick_public_key'),
+            'payment_id' => $payment_method_id,
+            'list_month' => shopfunctions::listMonths('cc_expire_month_' . $payment_method_id, $this->_cc_expire_month),
+            'list_year' => shopfunctions::listYears('cc_expire_year_' . $payment_method_id, $this->_cc_expire_year, NULL, NULL, ""),
+            'credit_card_list' => $creditCardList,
+            'cc_number' => $this->_cc_number,
+            'cc_cvv' => $this->_cc_cvv
+        ));
+        return $html;
+    }
+
+    /**
+     * Creates a Drop Down list of available Creditcards
+     *
+     * @author Valerie Isaksen
+     */
+    function _renderCreditCardList($creditCards, $selected_cc_type, $paymentmethod_id, $multiple = FALSE, $attrs = '')
+    {
+        $idA = $id = 'cc_type_' . $paymentmethod_id;
+        if (!is_array($creditCards)) {
+            $creditCards = (array)$creditCards;
+        }
+        foreach ($creditCards as $creditCard) {
+            $options[] = JHTML::_('select.option', $creditCard, $creditCard);
+        }
+        if ($multiple) {
+            $attrs = 'multiple="multiple"';
+            $idA .= '[]';
+        }
+        return JHTML::_('select.genericlist', $options, $idA, $attrs, 'value', 'text', $selected_cc_type);
     }
 
     /**
@@ -272,13 +488,16 @@ class plgVmpaymentBrick extends vmPSPlugin
     public function initPaymentwallConfigs($payment_id, $isPingback = false)
     {
         if ($params = $this->getPaymentConfigs($payment_id)) {
-            Paymentwall_Config::getInstance()->set(array(
-                'api_type' => Paymentwall_Config::API_GOODS,
-                'public_key' => $params['public_key'],
-                'private_key' => $params['private_key']
-            ));
             if ($isPingback) {
-                Paymentwall_Base::setSecretKey($params['secret_key']);
+                Paymentwall_Config::getInstance()->set(array(
+                    'private_key' => $params['brick_secret_key']
+                ));
+            } else {
+                Paymentwall_Config::getInstance()->set(array(
+                    'api_type' => Paymentwall_Config::API_GOODS,
+                    'public_key' => $params['brick_public_key'],
+                    'private_key' => $params['brick_private_key']
+                ));
             }
         }
     }
@@ -326,7 +545,8 @@ class plgVmpaymentBrick extends vmPSPlugin
             'customer[zip]' => $orderInfo->zip,
             'customer[username]' => $orderInfo->virtuemart_user_id,
             'customer[firstname]' => $orderInfo->first_name,
-            'customer[lastname]' => $orderInfo->last_name
+            'customer[lastname]' => $orderInfo->last_name,
+            'email' => $orderInfo->email,
         );
     }
 
@@ -398,7 +618,6 @@ class plgVmpaymentBrick extends vmPSPlugin
      */
     protected function storePSPluginInternalData($values, $primaryKey = 0, $preload = FALSE)
     {
-
         if (!class_exists('VirtueMartModelOrders')) {
             require(VMPATH_ADMIN . DS . 'models' . DS . 'orders.php');
         }
@@ -413,7 +632,7 @@ class plgVmpaymentBrick extends vmPSPlugin
      * @param $cart
      * @return array
      */
-    public function prepareTransactionData($order, $cart)
+    public function prepareTransactionData($order, $cart, $transactionId)
     {
         // Prepare data that should be stored in the database
         return array(
@@ -425,6 +644,7 @@ class plgVmpaymentBrick extends vmPSPlugin
             'payment_currency' => $this->_currentMethod->payment_currency,
             'payment_order_total' => $order['details']['BT']->order_total,
             'tax_id' => $this->_currentMethod->tax_id,
+            'transaction_id' => $transactionId
         );
     }
 

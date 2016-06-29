@@ -60,8 +60,8 @@ if (!$order) {
     die('Order invalid');
 }
 
-$paymentwallPlugin = new plgVmpaymentPaymentwall($dispatcher, array('type' => 'vmpayment', 'name' => 'brick'));
-$paymentwallPlugin->initPaymentwallConfigs($order['details']['BT']->virtuemart_paymentmethod_id, true);
+$brickPlugin = new plgVmpaymentBrick($dispatcher, array('type' => 'vmpayment', 'name' => 'brick'));
+$brickPlugin->initPaymentwallConfigs($order['details']['BT']->virtuemart_paymentmethod_id, true);
 
 if ($pingback->validate()) {
 
@@ -69,11 +69,11 @@ if ($pingback->validate()) {
     $orderUpd = array(
         'customer_notified' => 0,
         'virtuemart_order_id' => $productId,
-        'comments' => 'Brick payment successful'
+        'comments' => vmText::_('VMPAYMENT_BRICK_SUCCESS')
     );
 
     if ($pingback->isDeliverable()) {
-        $paymentwallPlugin->callDeliveryConfirmationApi($order, $pingback->getReferenceId());
+        $brickPlugin->callDeliveryConfirmationApi($order, $pingback->getReferenceId());
         $orderUpd['order_status'] = VM_ORDER_STATUS_CONFIRMED;
     } else if ($pingback->isCancelable()) {
         $orderUpd['order_status'] = VM_ORDER_STATUS_REFUNDED;

@@ -12,7 +12,6 @@
   <files>
     <filename plugin="brick">brick.php</filename>
     <filename>pingback.php</filename>
-    <filename>billing.php</filename>
     <folder>paymentwall-php</folder>
     <folder>brick</folder>
     <folder>language</folder>
@@ -20,17 +19,17 @@
   <vmconfig>
         <fields name="params">
             <fieldset name="payment" addfieldpath="/administrator/components/com_virtuemart/fields">
-                <field name="app_key" type="text" size="50" label="VMPAYMENT_PAYMENTWALL_APP_KEY"
-                       description="VMPAYMENT_PAYMENTWALL_APP_KEY_DESC"/>
-                <field name="secret_key" type="text" size="50" label="VMPAYMENT_PAYMENTWALL_SECRET_KEY"
-                       description="VMPAYMENT_PAYMENTWALL_SECRET_KEY_DESC"/>
-                <field name="public_key" type="text" size="50" label="VMPAYMENT_PAYMENTWALL_PUBLIC_KEY"
-                       description="VMPAYMENT_PAYMENTWALL_PUBLIC_KEY_DESC"/>
-                <field name="private_key" type="text" size="50" label="VMPAYMENT_PAYMENTWALL_PRIVATE_KEY"
-                       description="VMPAYMENT_PAYMENTWALL_PRIVATE_KEY_DESC"/>               
+                <field name="brick_app_key" type="text" size="50" label="VMPAYMENT_BRICK_APP_KEY"
+                       description="VMPAYMENT_BRICK_APP_KEY_DESC"/>
+                <field name="brick_secret_key" type="text" size="50" label="VMPAYMENT_BRICK_SECRET_KEY"
+                       description="VMPAYMENT_BRICK_SECRET_KEY_DESC"/>
+                <field name="brick_public_key" type="text" size="50" label="VMPAYMENT_BRICK_PUBLIC_KEY"
+                       description="VMPAYMENT_BRICK_PUBLIC_KEY_DESC"/>
+                <field name="brick_private_key" type="text" size="50" label="VMPAYMENT_BRICK_PRIVATE_KEY"
+                       description="VMPAYMENT_BRICK_PRIVATE_KEY_DESC"/>               
                 <field name="delivery" type="radio" scope="com_virtuemart" default="1"
-                       label="VMPAYMENT_PAYMENTWALL_DELIVERY"
-                       description="VMPAYMENT_PAYMENTWALL_DELIVERY_DESC">
+                       label="VMPAYMENT_BRICK_DELIVERY"
+                       description="VMPAYMENT_BRICK_DELIVERY_DESC">
                     <option value="0">COM_VIRTUEMART_NO</option>
                     <option value="1">COM_VIRTUEMART_YES</option>
                 </field>
