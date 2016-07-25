@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<extension version="2.5" type="plugin" group="vmpayment" method="install">
+  <name>Brick</name>
+  <creationDate>Jun 08 2016</creationDate>
+  <author>Paymentwall Inc.</author>
+  <authorUrl>https://www.paymentwall.com</authorUrl>
+  <authorEmail>devsupport@paymentwall.com</authorEmail>
+  <copyright>Copyright (C) 2010-2016 Paymentwall Inc. All rights reserved.</copyright>
+  <license>The MIT License (MIT)</license>
+  <version>1.0.3</version>
+  <description><![CDATA[<a href="https://paymentwall.com" target="_blank">Paymentwall</a> best payment gateway. ]]></description>
+  <files>
+    <filename plugin="brick">brick.php</filename>
+    <filename>pingback.php</filename>
+    <folder>paymentwall-php</folder>
+    <folder>brick</folder>
+    <folder>language</folder>
+  </files>
+  <vmconfig>
+        <fields name="params">
+            <fieldset name="payment" addfieldpath="/administrator/components/com_virtuemart/fields">
+                <field name="brick_app_key" type="text" size="50" label="VMPAYMENT_BRICK_APP_KEY"
+                       description="VMPAYMENT_BRICK_APP_KEY_DESC"/>
+                <field name="brick_secret_key" type="text" size="50" label="VMPAYMENT_BRICK_SECRET_KEY"
+                       description="VMPAYMENT_BRICK_SECRET_KEY_DESC"/>
+                <field name="brick_public_key" type="text" size="50" label="VMPAYMENT_BRICK_PUBLIC_KEY"
+                       description="VMPAYMENT_BRICK_PUBLIC_KEY_DESC"/>
+                <field name="brick_private_key" type="text" size="50" label="VMPAYMENT_BRICK_PRIVATE_KEY"
+                       description="VMPAYMENT_BRICK_PRIVATE_KEY_DESC"/>               
+                <field name="delivery" type="radio" scope="com_virtuemart" default="1"
+                       label="VMPAYMENT_BRICK_DELIVERY"
+                       description="VMPAYMENT_BRICK_DELIVERY_DESC">
+                    <option value="0">COM_VIRTUEMART_NO</option>
+                    <option value="1">COM_VIRTUEMART_YES</option>
+                </field>
+            </fieldset>
+        </fields>
+    </vmconfig>
+</extension>
